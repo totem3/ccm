@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "ccm"
+version = "0.1.0"
+description = "Claude Session Manager"
+authors = ["totem3 <you@example.com>"]
+license = "MIT"
+readme = "README.md"
+packages = [{ include = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+openai = "^1.30"        # Codex 呼び出し用
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.2"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

@@ -1,0 +1,172 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 3e9f6d5..7f4c0c1 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@
+ [tool.poetry.dependencies]
+ python = "^3.12"
++openai = "^1.30"        # Codex 呼び出し用
+ 
+ [tool.poetry.group.dev.dependencies]
+ pytest = "^8.2"
+diff --git a/scripts/run_codex.py b/scripts/run_codex.py
+new file mode 100755
+index 0000000..e7fdde4
+--- /dev/null
++++ b/scripts/run_codex.py
+@@
++#!/usr/bin/env python3
++\"\"\"Run Codex against a prompt read from STDIN and save the Git diff returned
++by the model into *codex.patch* in the current directory.
++
++Usage:
++    echo \"<PROMPT>\" | poetry run python scripts/run_codex.py
++\"\"\"
++
++from __future__ import annotations
++
++import os
++import sys
++
++import openai  # type: ignore
++
++
++def main() -> None:  # pragma: no cover — tested via integration in CI
++    api_key = os.environ.get(\"OPENAI_API_KEY\")
++    if not api_key:
++        sys.exit(\"OPENAI_API_KEY is not set.\")
++
++    prompt = sys.stdin.read().strip()
++    if not prompt:
++        sys.exit(\"No prompt supplied on STDIN.\")
++
++    openai.api_key = api_key
++
++    response = openai.ChatCompletion.create(
++        model=\"gpt-4o-mini\",  # コスト対策。大きな修正は 'gpt-4o' へリトライ
++        messages=[
++            {
++                \"role\": \"system\",
++                \"content\": (
++                    \"You are an experienced Python 3.12 engineer working on the \\n\"
++                    \"Claude Session Manager project. Return ONLY a valid unified diff.\\n\"
++                    \"Follow conventional commits and keep tests green.\""
++                ),
++            },
++            {\"role\": \"user\", \"content\": prompt},
++        ],
++        temperature=0.1,
++        max_tokens=2048,
++    )
++
++    diff_text = response.choices[0].message.content
++    with open(\"codex.patch\", \"w\", encoding=\"utf-8\") as fh:
++        fh.write(diff_text)
++
++    print(\"📝  Patch written to codex.patch\")
++
++
++if __name__ == \"__main__\":  # pragma: no cover
++    main()
++
+diff --git a/.github/actions/setup-poetry/action.yml b/.github/actions/setup-poetry/action.yml
+new file mode 100644
+index 0000000..ad076ec
+--- /dev/null
++++ b/.github/actions/setup-poetry/action.yml
+@@
++name: \"Setup Poetry\"
++description: \"Install Python 3.12 and Poetry with basic caching.\"
++
++runs:
++  using: \"composite\"
++  steps:
++    - uses: actions/setup-python@v5
++      with:
++        python-version: \"3.12\"
++
++    - name: Install Poetry
++      shell: bash
++      run: |
++        pip install poetry==1.8.2
++
++    - name: Cache Poetry virtualenv
++      uses: actions/cache@v4
++      with:
++        path: ~/.cache/pypoetry
++        key: poetry-${{ runner.os }}-${{ hashFiles('**/poetry.lock') }}
++        restore-keys: |
++          poetry-${{ runner.os }}-
++
+diff --git a/.github/workflows/codex.yml b/.github/workflows/codex.yml
+new file mode 100644
+index 0000000..e3f8542
+--- /dev/null
++++ b/.github/workflows/codex.yml
+@@
++name: codex-autogen
++
++on:
++  issue_comment:
++    types: [created]
++
++permissions:
++  contents: write
++  pull-requests: write
++
++jobs:
++  codex:
++    if: startsWith(github.event.comment.body, '/codex')
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v4
++
++      - uses: ./.github/actions/setup-poetry
++
++      - name: Install project deps
++        shell: bash
++        run: poetry install --no-root
++
++      - name: Generate patch with Codex
++        env:
++          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
++        shell: bash
++        run: |
++          COMMENT_BODY=$(echo \"${{ github.event.comment.body }}\" | sed 's|^/codex *||')
++          echo \"$COMMENT_BODY\" | poetry run python scripts/run_codex.py
++
++      - name: Apply patch & run tests
++        shell: bash
++        run: |
++          git apply --whitespace=nowarn codex.patch
++          poetry run pytest -q
++
++      - name: Commit & push patch
++        if: success()
++        shell: bash
++        run: |
++          git config user.name \"codex-bot\"
++          git config user.email \"codex-bot@example.com\"
++          git add -A
++          git commit -m \"feat: codex update [skip ci]\"
++          git push origin HEAD
++
+diff --git a/.github/ISSUE_TEMPLATE/codex_feature.yml b/.github/ISSUE_TEMPLATE/codex_feature.yml
+new file mode 100644
+index 0000000..74fbaa2
+--- /dev/null
++++ b/.github/ISSUE_TEMPLATE/codex_feature.yml
+@@
++name: \"Codex task\"
++description: \"Ask Codex to implement or fix something\"
++title: \"[codex] <short description>\"
++labels: [codex]
++body:
++  - type: textarea
++    attributes:
++      label: \"Prompt for Codex\"
++      description: \"Describe exactly what Codex should do. Keep it small — ideally one file or feature at a time.\"
++      placeholder: \"Implement the ProcessWatcher module ...\"
++    validations:
++      required: true
++

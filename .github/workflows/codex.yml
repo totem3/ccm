@@ -1,0 +1,47 @@
+name: codex-autogen
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  codex:
+    if: startsWith(github.event.comment.body, '/codex')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-poetry
+
+      - name: Install dependencies
+        shell: bash
+        run: poetry install --no-root
+
+      - name: Generate patch with Codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        shell: bash
+        run: |
+          COMMENT_BODY="$(echo "${{ github.event.comment.body }}" | sed 's|^/codex *||')"
+          echo "$COMMENT_BODY" | poetry run python scripts/run_codex.py
+
+      - name: Apply patch & run tests
+        shell: bash
+        run: |
+          git apply --whitespace=nowarn codex.patch
+          poetry run pytest -q || exit 1
+
+      - name: Commit & push patch
+        if: success()
+        shell: bash
+        run: |
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@example.com"
+          git add -A
+          git commit -m "feat: codex update [skip ci]"
+          git push origin HEAD
