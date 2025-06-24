@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # --------- Checkout & Python/Poetry ----------
       - uses: actions/checkout@v4
 
       - uses: ./.github/actions/setup-poetry
@@ -22,20 +23,44 @@ jobs:
         shell: bash
         run: poetry install --no-root
 
+      # --------- Generate patch with Codex ----------
       - name: Generate patch with Codex
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         shell: bash
         run: |
-          COMMENT_BODY="$(echo "${{ github.event.comment.body }}" | sed 's|^/codex *||')"
+          # 1) strip "/codex " prefix
+          COMMENT_BODY=$(echo "${{ github.event.comment.body }}" | sed -E 's|^/codex[[:space:]]*||')
+          # 2) if empty or "run", fall back to issue body
+          if [ -z "$COMMENT_BODY" ] || [ "$COMMENT_BODY" = "run" ]; then
+            COMMENT_BODY=$(gh api \
+              repos/${{ github.repository }}/issues/${{ github.event.issue.number }} \
+              --jq '.body')
+          fi
           echo "$COMMENT_BODY" | poetry run python scripts/run_codex.py
 
+      # --------- Apply patch & run tests ----------
       - name: Apply patch & run tests
         shell: bash
         run: |
-          git apply --whitespace=nowarn codex.patch
-          poetry run pytest -q || exit 1
+          set -euo pipefail
+          if git apply --3way --check codex.patch; then
+            git apply --3way --whitespace=nowarn codex.patch
+          else
+            echo "::error::Patch failed to apply"
+            exit 1
+          fi
+          poetry run pytest -q
 
+      # --------- Upload failing patch for inspection ----------
+      - name: Upload failing patch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-failed-patch
+          path: codex.patch
+
+      # --------- Commit & push when green ----------
       - name: Commit & push patch
         if: success()
         shell: bash
